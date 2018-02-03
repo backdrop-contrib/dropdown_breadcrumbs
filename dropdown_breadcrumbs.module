@@ -1,0 +1,210 @@
+<?php
+/**
+ * @file
+ * Custom blocks for IntoWine.com
+ */
+
+/**
+ * Implements hook_menu_breadcrumb_alter().
+ */
+function dropdown_breadcrumbs_menu_breadcrumb_alter(&$active_trail, $item) {
+  foreach ($active_trail as &$crumb) {
+    if (isset($crumb['menu_name'])) {
+      $path = backdrop_get_path('module', 'dropdown_breadcrumbs');
+      $attachments = array(
+         'js' => array($path . '/js/dropdown_breadcrumbs.js'),
+         'library' => array(array('system', 'smartmenus')),
+       );
+
+      $level = $crumb['depth'] + 1;
+      // @todo - make this a block setting?
+      $depth = $level + 1;
+
+      // Build a renderable array of links for the drop-down menu.
+      $tree = menu_tree_page_data($crumb['menu_name'], $depth, FALSE, FALSE);
+
+      // @todo Allow alteration of the tree before we begin operations on it.
+      // backdrop_alter('dropdown_breadcrumbs_tree', $tree);
+
+      // Load the system module's menu helper functions.
+      module_load_include('inc', 'system', 'system.menu');
+
+      // Prune the tree along the active trail to the specified level.
+      if ($level > 1) {
+        system_menu_tree_prune_tree($tree, $level);
+      }
+
+      // Trim the tree to the active path.
+      system_menu_tree_trim_active_path($tree);
+
+      // Trim the branches that extend beyond the specified depth.
+      system_menu_tree_depth_trim($tree, $depth);
+
+      $breadcrumb_menu = menu_tree_output($tree);
+      if (!empty($breadcrumb_menu)) {
+        $breadcrumb_menu['#attached'] = $attachments;
+        $breadcrumb_menu['#wrapper_attributes']['class'] = array('sm', 'sm-vertical', 'breadcrumb-dropdown');
+        $breadcrumb_menu['#wrapper_attributes']['data-menu-style'] = 'dropdown';
+        $crumb['#dropdown_breadcrumb_menu'] = $breadcrumb_menu;
+      }
+    }
+  }
+}
+
+/**
+ * Implementation of hook_block_info().
+ */
+function dropdown_breadcrumbs_block_info() {
+  $blocks['dropdown-breadcrumb'] = array(
+    'info' => t('Dropdown Breadcrumb'),
+    'description' => t('Fancy breadcrumb with a built-in drop-down menu.'),
+    'required contexts' => array('taxonomy_term' => 'taxonomy_term'),
+    'cache' => BACKDROP_CACHE_PER_PAGE,
+  );
+  $blocks['dropdown-title'] = array(
+    'info' => t('Dropdown Page title'),
+    'description' => t('Fancy page title with a built-in drop-down menu.'),
+    'required contexts' => array('taxonomy_term' => 'taxonomy_term'),
+    'cache' => BACKDROP_CACHE_PER_PAGE,
+  );
+
+  return $blocks;
+}
+
+/**
+ * Implementation of hook_block_configure().
+ */
+function dropdown_breadcrumbs_block_configure($delta = '', $settings = array()) {
+  if ($delta == 'dropdown-breadcrumb') {
+    $form['current'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Display the current page title as the last breadcrumb'),
+      '#default_value' => !empty($settings['current']),
+    );
+  }
+  elseif ($delta = 'dropdown-title') {
+
+  }
+
+  return $form;
+}
+
+/**
+ * Implementation of hook_block_view().
+ */
+function dropdown_breadcrumbs_block_view($delta = '', $settings = array(), $contexts = array()) {
+  $block = array();
+
+  if ($delta == 'dropdown-breadcrumb') {
+    $block['subject'] = NULL;
+    $block['content'] = dropdown_breadcrumbs_get_breadcrumb_trail($settings, $contexts);
+  }
+  elseif ($delta = 'dropdown-title') {
+    $block['subject'] = NULL;
+    $block['content'] = dropdown_breadcrumbs_get_title($settings, $contexts);
+  }
+
+  return $block;
+}
+
+/**
+ * Block callback.
+ */
+function dropdown_breadcrumbs_get_breadcrumb_trail($settings = array(), $contexts = array()) {
+  $crumbs = dropdown_breadcrumbs_get_active_breadcrumb($settings['current']);
+
+  return theme('dropdown_breadcrumbs', array('breadcrumb' => $crumbs));
+}
+
+/**
+ * Block callback.
+ */
+function dropdown_breadcrumbs_get_title($settings = array(), $contexts = array()) {
+  $crumbs = dropdown_breadcrumbs_get_active_breadcrumb(TRUE);
+  $menu = end($crumbs);
+
+  return theme('dropdown_title', array('menu' => $menu));
+}
+
+/**
+ * Implements hook_theme().
+ */
+function dropdown_breadcrumbs_theme($existing, $type, $theme, $path) {
+  return array(
+    'dropdown_breadcrumbs' => array(
+      'variables' => array(
+        'breadcrumb' => array(),
+      ),
+      'file' => 'dropdown_breadcrumbs.theme.inc',
+    ),
+    'dropdown_title' => array(
+      'variables' => array(
+        'menu' => array(),
+      ),
+      'file' => 'dropdown_breadcrumbs.theme.inc',
+    ),
+  );
+}
+
+/**
+ * This is functionally a copy of menu_get_active_breadcrumb() that includes the
+ * following changes:
+ *  - Doesn't make the breadcrumbs into links, instead leaves them renderable.
+ *  - Adds special handling for the current page as last breadcrumb.
+ *
+ * @param $current
+ *   Whether to render the current page as the last (non-linked) breadcrumb.
+ *
+ * @return array
+ */
+function dropdown_breadcrumbs_get_active_breadcrumb($current = TRUE) {
+  $breadcrumbs = array();
+
+  // No breadcrumb on the front page.
+  if (backdrop_is_front_page()) {
+    return $breadcrumbs;
+  }
+
+  $item = menu_get_item();
+  if (!empty($item['access'])) {
+    $active_trail = menu_get_active_trail();
+
+    // Allow modules to alter the breadcrumb as this is much faster than
+    // rebuilding an entirely new active trail.
+    backdrop_alter('menu_breadcrumb', $active_trail, $item);
+
+    // Add special handling for the current page as last breadcrumb.
+    if ($current == FALSE) {
+      $end = end($active_trail);
+      if ($item['href'] == $end['href']) {
+        array_pop($active_trail);
+        $end['access'] = FALSE;
+        $active_trail[] = $end;
+      }
+    }
+
+    // Remove the tab root (parent) if the current path links to its parent.
+    // Normally, the tab root link is included in the breadcrumb, as soon as we
+    // are on a local task or any other child link. However, if we are on a
+    // default local task (e.g., node/%/view), then we do not want the tab root
+    // link (e.g., node/%) to appear, as it would be identical to the current
+    // page. Since this behavior also needs to work recursively (i.e., on
+    // default local tasks of default local tasks), and since the last non-task
+    // link in the trail is used as page title (see menu_get_active_title()),
+    // this condition cannot be cleanly integrated into menu_get_active_trail().
+    // menu_get_active_trail() already skips all links that link to their parent
+    // (commonly MENU_DEFAULT_LOCAL_TASK). In order to also hide the parent link
+    // itself, we always remove the last link in the trail, if the current
+    // router item links to its parent.
+    if (($item['type'] & MENU_LINKS_TO_PARENT) == MENU_LINKS_TO_PARENT) {
+      array_pop($active_trail);
+    }
+
+    foreach ($active_trail as $parent) {
+      // This is where we remove the creation of links.
+      $breadcrumbs[] = $parent;
+    }
+  }
+
+  return $breadcrumbs;
+}

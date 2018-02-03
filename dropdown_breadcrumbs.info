@@ -1,0 +1,6 @@
+type = module
+name = Dropdown Breadcrumbs
+description = Provides a drop-down breadcrumb based on the active menu trail.
+backdrop = 1.x
+
+
